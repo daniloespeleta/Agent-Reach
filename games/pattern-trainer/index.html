@@ -1,0 +1,709 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Pattern Trainer — Treino de Padrões</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { color-scheme: dark; }
+    html, body, #root { height: 100%; }
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 800px at 50% -10%, #1e293b 0%, #0b1120 55%, #060a14 100%);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    @keyframes pop { 0% { transform: scale(.9); opacity: 0 } 100% { transform: scale(1); opacity: 1 } }
+    @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)} }
+    @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+    .anim-pop { animation: pop .18s ease-out both; }
+    .anim-shake { animation: shake .3s ease-in-out both; }
+    .anim-float { animation: float 3s ease-in-out infinite; }
+    .no-select { user-select: none; -webkit-user-select: none; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    /* ------------------------------------------------------------------ */
+    /* Utilitários                                                         */
+    /* ------------------------------------------------------------------ */
+    const rand = (n) => Math.floor(Math.random() * n);
+    const pick = (arr) => arr[rand(arr.length)];
+    const shuffle = (arr) => {
+      const a = arr.slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = rand(i + 1);
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    };
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const uniq = (arr) => Array.from(new Set(arr));
+
+    // Persistência tolerante a storage indisponível.
+    function loadBest() {
+      try {
+        return JSON.parse(localStorage.getItem("patternTrainer.best") || "{}") || {};
+      } catch (e) { return {}; }
+    }
+    function saveBest(obj) {
+      try { localStorage.setItem("patternTrainer.best", JSON.stringify(obj)); } catch (e) {}
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Configuração dos modos                                             */
+    /* ------------------------------------------------------------------ */
+    const MODES = {
+      sequence: { key: "sequence", name: "Sequências", emoji: "🔢",
+        blurb: "Descubra o item que falta na sequência lógica." },
+      odd:      { key: "odd", name: "Ache o Intruso", emoji: "🔍",
+        blurb: "Encontre o item que quebra o padrão da grade." },
+      group:    { key: "group", name: "Agrupar por Regra", emoji: "🧩",
+        blurb: "Selecione todos os itens que seguem a regra oculta." },
+    };
+
+    const SHAPES = ["●", "▲", "■", "◆", "★", "⬟", "▬", "⬢"];
+    const COLORS = [
+      { name: "vermelho", hex: "#ef4444" },
+      { name: "azul", hex: "#3b82f6" },
+      { name: "verde", hex: "#22c55e" },
+      { name: "amarelo", hex: "#eab308" },
+      { name: "roxo", hex: "#a855f7" },
+      { name: "laranja", hex: "#f97316" },
+      { name: "ciano", hex: "#06b6d4" },
+      { name: "rosa", hex: "#ec4899" },
+    ];
+
+    /* ------------------------------------------------------------------ */
+    /* Gerador: SEQUÊNCIAS                                                 */
+    /* ------------------------------------------------------------------ */
+    // Devolve { display: [tokens...], answer, options } — um token da lista é "?".
+    function generateSequenceRound(level) {
+      // tipos disponíveis vão crescendo com o nível
+      const types = ["arith"];
+      if (level >= 2) types.push("geom");
+      if (level >= 3) types.push("alt");
+      if (level >= 4) types.push("shapeCycle");
+      if (level >= 5) types.push("fib");
+      const type = pick(types);
+      const len = clamp(4 + Math.floor(level / 2), 4, 7);
+
+      let values = [];
+      let label = "";
+
+      if (type === "arith") {
+        const start = 1 + rand(9 + level);
+        const step = (1 + rand(3 + level)) * (level >= 3 && Math.random() < 0.4 ? -1 : 1);
+        for (let i = 0; i < len; i++) values.push(start + step * i);
+        label = "Número que completa a sequência";
+      } else if (type === "geom") {
+        const start = 1 + rand(4);
+        const ratio = 2 + rand(2); // 2 ou 3
+        for (let i = 0; i < len; i++) values.push(start * ratio ** i);
+        label = "Número que completa a sequência";
+      } else if (type === "alt") {
+        // dois passos alternados: +a, +b, +a, +b ...
+        const start = 1 + rand(9);
+        const a = 1 + rand(5), b = 1 + rand(5);
+        let v = start;
+        for (let i = 0; i < len; i++) { values.push(v); v += (i % 2 === 0 ? a : b); }
+        label = "Número que completa a sequência";
+      } else if (type === "fib") {
+        let x = 1 + rand(3), y = 1 + rand(4);
+        values.push(x, y);
+        for (let i = 2; i < len; i++) { const z = x + y; values.push(z); x = y; y = z; }
+        label = "Número que completa a sequência (soma dos anteriores)";
+      } else if (type === "shapeCycle") {
+        // ciclo de formas com passo fixo
+        const base = shuffle(SHAPES).slice(0, 3 + rand(2));
+        const step = 1 + rand(base.length - 1);
+        for (let i = 0; i < len; i++) values.push(base[(i * step) % base.length]);
+        label = "Forma que completa o padrão";
+      }
+
+      // posição escondida: geralmente a última; às vezes o meio (níveis altos)
+      const hideIndex = (level >= 4 && Math.random() < 0.35)
+        ? 1 + rand(len - 2)
+        : len - 1;
+      const answer = values[hideIndex];
+      const isShape = type === "shapeCycle";
+
+      // distratores
+      const options = new Set([String(answer)]);
+      if (isShape) {
+        while (options.size < 4) options.add(pick(SHAPES));
+      } else {
+        const near = [answer + 1, answer - 1, answer + 2, answer - 2,
+                      Math.round(answer * 1.5), answer + 3, answer - 3];
+        for (const d of shuffle(near)) {
+          if (options.size >= 4) break;
+          if (d !== answer && d >= 0) options.add(String(d));
+        }
+        while (options.size < 4) options.add(String(answer + 4 + rand(5)));
+      }
+
+      const display = values.map((v, i) => (i === hideIndex ? "?" : String(v)));
+      return {
+        mode: "sequence",
+        label,
+        display,
+        isShape,
+        options: shuffle(Array.from(options)),
+        answer: String(answer),
+      };
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Gerador: ACHE O INTRUSO (odd-one-out)                              */
+    /* ------------------------------------------------------------------ */
+    // Grade de cartas iguais por uma regra; uma carta quebra a regra.
+    function generateOddOneOutRound(level) {
+      const cols = clamp(3 + Math.floor(level / 3), 3, 5);
+      const rows = clamp(2 + Math.floor(level / 2), 2, 5);
+      const total = cols * rows;
+
+      // dimensões: shape, color, rotation
+      const baseShape = pick(SHAPES);
+      const baseColor = pick(COLORS);
+      // o que difere o intruso — quanto maior o nível, mais sutil
+      const dims = ["shape", "color"];
+      if (level >= 3) dims.push("rotation");
+      const diff = pick(dims);
+
+      let oddShape = baseShape, oddColor = baseColor, oddRot = 0, baseRot = 0;
+      if (diff === "shape") {
+        oddShape = pick(SHAPES.filter((s) => s !== baseShape));
+      } else if (diff === "color") {
+        // em níveis altos escolhe uma cor "vizinha" (mais difícil)
+        const others = COLORS.filter((c) => c.name !== baseColor.name);
+        oddColor = level >= 4 ? nearestColor(baseColor, others) : pick(others);
+      } else if (diff === "rotation") {
+        baseRot = 0;
+        oddRot = level >= 5 ? 15 : 45;
+      }
+
+      const oddIndex = rand(total);
+      const cards = [];
+      for (let i = 0; i < total; i++) {
+        const isOdd = i === oddIndex;
+        cards.push({
+          shape: isOdd ? oddShape : baseShape,
+          color: (isOdd ? oddColor : baseColor).hex,
+          rot: isOdd ? oddRot : baseRot,
+        });
+      }
+
+      return {
+        mode: "odd",
+        label: "Toque no item diferente dos demais",
+        cols, rows, cards,
+        answerIndex: oddIndex,
+      };
+    }
+
+    function nearestColor(base, others) {
+      // pega a cor de hex mais próximo — cria diferença mais sutil
+      const toRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+      const [br, bg, bb] = toRgb(base.hex);
+      let best = others[0], bestD = Infinity;
+      for (const c of others) {
+        const [r, g, b] = toRgb(c.hex);
+        const d = (r - br) ** 2 + (g - bg) ** 2 + (b - bb) ** 2;
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      return best;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Gerador: AGRUPAR POR REGRA                                         */
+    /* ------------------------------------------------------------------ */
+    // Mostra itens (forma + cor); jogador seleciona TODOS que batem a regra.
+    function generateGroupingRound(level) {
+      const count = clamp(6 + level, 6, 12);
+      const shapeA = pick(SHAPES);
+      const shapeB = pick(SHAPES.filter((s) => s !== shapeA));
+      const colorA = pick(COLORS);
+      const colorB = pick(COLORS.filter((c) => c.name !== colorA.name));
+
+      // regras cada vez mais compostas
+      const rules = [
+        { text: `Selecione todas as peças da cor ${colorA.name}`,
+          match: (it) => it.color === colorA.name },
+        { text: `Selecione todas as peças com a forma "${shapeA}"`,
+          match: (it) => it.shape === shapeA },
+      ];
+      if (level >= 3) {
+        rules.push({
+          text: `Selecione as peças ${colorA.name} E com a forma "${shapeA}"`,
+          match: (it) => it.color === colorA.name && it.shape === shapeA,
+        });
+      }
+      if (level >= 4) {
+        rules.push({
+          text: `Selecione as peças ${colorA.name} OU com a forma "${shapeA}"`,
+          match: (it) => it.color === colorA.name || it.shape === shapeA,
+        });
+      }
+      const rule = pick(rules);
+
+      // gera itens combinando as duas formas e duas cores
+      const shapes = [shapeA, shapeB];
+      const colors = [colorA, colorB];
+      let items = [];
+      for (let i = 0; i < count; i++) {
+        const s = pick(shapes);
+        const c = pick(colors);
+        items.push({ id: i, shape: s, color: c.name, hex: c.hex });
+      }
+      // garante pelo menos 1 correto e 1 incorreto
+      const anyMatch = items.some((it) => rule.match(it));
+      const anyMiss = items.some((it) => !rule.match(it));
+      if (!anyMatch) { items[0] = { id: 0, shape: shapeA, color: colorA.name, hex: colorA.hex }; }
+      if (!anyMiss)  { items[items.length - 1] = { id: items.length - 1, shape: shapeB, color: colorB.name, hex: colorB.hex }; }
+
+      const correct = items.filter((it) => rule.match(it)).map((it) => it.id);
+      return {
+        mode: "group",
+        label: rule.text,
+        items,
+        correct: new Set(correct),
+      };
+    }
+
+    function generateRound(mode, level) {
+      if (mode === "sequence") return generateSequenceRound(level);
+      if (mode === "odd") return generateOddOneOutRound(level);
+      return generateGroupingRound(level);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Constantes de jogo                                                 */
+    /* ------------------------------------------------------------------ */
+    const START_LIVES = 3;
+    const LEVEL_UP_EVERY = 4;     // acertos para subir de nível
+    const BASE_POINTS = 100;
+    const timeForLevel = (lvl) => clamp(20 - lvl, 8, 20); // segundos por questão
+
+    /* ------------------------------------------------------------------ */
+    /* Componentes visuais reutilizáveis                                  */
+    /* ------------------------------------------------------------------ */
+    function Glyph({ shape, hex, rot = 0, size = 34 }) {
+      return (
+        <span className="no-select" style={{
+          color: hex, fontSize: size, lineHeight: 1,
+          display: "inline-block", transform: `rotate(${rot}deg)`,
+        }}>{shape}</span>
+      );
+    }
+
+    function Stat({ label, value, accent }) {
+      return (
+        <div className="flex flex-col items-center px-3">
+          <span className="text-[10px] uppercase tracking-wider text-slate-400">{label}</span>
+          <span className={"text-lg font-bold " + (accent || "text-slate-100")}>{value}</span>
+        </div>
+      );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Tela: HOME                                                         */
+    /* ------------------------------------------------------------------ */
+    function HomeScreen({ best, onStart }) {
+      return (
+        <div className="w-full max-w-md mx-auto text-center px-5 py-8">
+          <div className="anim-float text-6xl mb-2">🧠</div>
+          <h1 className="text-3xl font-black text-slate-50 tracking-tight">Pattern Trainer</h1>
+          <p className="text-slate-400 mt-2 mb-8">
+            Treine seu cérebro a reconhecer padrões. Escolha um modo:
+          </p>
+          <div className="space-y-3">
+            {Object.values(MODES).map((m) => (
+              <button key={m.key} onClick={() => onStart(m.key)}
+                className="w-full group flex items-center gap-4 rounded-2xl border border-slate-700/70
+                           bg-slate-800/50 hover:bg-slate-700/60 hover:border-indigo-400/60
+                           transition-all p-4 text-left active:scale-[.98]">
+                <span className="text-3xl">{m.emoji}</span>
+                <span className="flex-1">
+                  <span className="block font-bold text-slate-100">{m.name}</span>
+                  <span className="block text-xs text-slate-400">{m.blurb}</span>
+                </span>
+                <span className="text-right">
+                  <span className="block text-[10px] uppercase text-slate-500">recorde</span>
+                  <span className="block font-bold text-amber-300">{best[m.key] || 0}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-slate-600 mt-8">
+            Dificuldade progressiva • 3 vidas • bônus de velocidade e streak
+          </p>
+        </div>
+      );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Tela: RESULTS                                                      */
+    /* ------------------------------------------------------------------ */
+    function ResultsScreen({ modeKey, score, correct, total, best, isRecord, onReplay, onHome }) {
+      const acc = total > 0 ? Math.round((correct / total) * 100) : 0;
+      return (
+        <div className="w-full max-w-md mx-auto text-center px-5 py-10 anim-pop">
+          <div className="text-5xl mb-2">{isRecord ? "🏆" : "🎯"}</div>
+          <h2 className="text-2xl font-black text-slate-50">
+            {isRecord ? "Novo recorde!" : "Fim de jogo"}
+          </h2>
+          <p className="text-slate-400 text-sm mb-6">{MODES[modeKey].name}</p>
+
+          <div className="rounded-2xl border border-slate-700/70 bg-slate-800/50 p-6 mb-6">
+            <div className="text-5xl font-black text-indigo-300">{score}</div>
+            <div className="text-xs uppercase tracking-wider text-slate-500 mt-1">pontos</div>
+            <div className="flex justify-center gap-6 mt-5 text-sm">
+              <div><span className="font-bold text-slate-100">{correct}/{total}</span>
+                <div className="text-[11px] text-slate-500">acertos</div></div>
+              <div><span className="font-bold text-slate-100">{acc}%</span>
+                <div className="text-[11px] text-slate-500">precisão</div></div>
+              <div><span className="font-bold text-amber-300">{best}</span>
+                <div className="text-[11px] text-slate-500">recorde</div></div>
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <button onClick={onReplay}
+              className="flex-1 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-bold py-3 active:scale-[.98] transition">
+              Jogar de novo
+            </button>
+            <button onClick={onHome}
+              className="flex-1 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 font-bold py-3 active:scale-[.98] transition">
+              Menu
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Tela: GAME                                                         */
+    /* ------------------------------------------------------------------ */
+    function GameScreen({ modeKey, onGameOver }) {
+      const [level, setLevel] = useState(1);
+      const [score, setScore] = useState(0);
+      const [lives, setLives] = useState(START_LIVES);
+      const [streak, setStreak] = useState(0);
+      const [correctCount, setCorrectCount] = useState(0);
+      const [totalCount, setTotalCount] = useState(0);
+      const [round, setRound] = useState(() => generateRound(modeKey, 1));
+      const [feedback, setFeedback] = useState(null); // {ok, index}
+      const [locked, setLocked] = useState(false);
+      const [selected, setSelected] = useState(new Set()); // modo group
+      const [timeLeft, setTimeLeft] = useState(timeForLevel(1));
+
+      const roundStart = useRef(Date.now());
+      const roundLimit = useRef(timeForLevel(1));
+
+      // Referências estáveis para o timeout evitar closures obsoletas.
+      const stateRef = useRef();
+      stateRef.current = { level, score, lives, streak, correctCount, totalCount, locked };
+
+      const nextRound = useCallback((nextLevel) => {
+        const lvl = nextLevel;
+        const limit = timeForLevel(lvl);
+        roundLimit.current = limit;
+        roundStart.current = Date.now();
+        setSelected(new Set());
+        setFeedback(null);
+        setLocked(false);
+        setTimeLeft(limit);
+        setRound(generateRound(modeKey, lvl));
+      }, [modeKey]);
+
+      // encerra o jogo
+      const finish = useCallback((finalScore, corr, tot) => {
+        onGameOver({ score: finalScore, correct: corr, total: tot });
+      }, [onGameOver]);
+
+      // aplica resultado de uma questão (acerto/erro)
+      const resolve = useCallback((ok) => {
+        const s = stateRef.current;
+        if (s.locked) return;
+        setLocked(true);
+        const newTotal = s.totalCount + 1;
+        setTotalCount(newTotal);
+
+        if (ok) {
+          const elapsed = (Date.now() - roundStart.current) / 1000;
+          const timeBonus = Math.round(clamp(1 - elapsed / roundLimit.current, 0, 1) * 60);
+          const newStreak = s.streak + 1;
+          const mult = 1 + Math.min(newStreak - 1, 5) * 0.25;
+          const gained = Math.round((BASE_POINTS + level * 15 + timeBonus) * mult);
+          const newScore = s.score + gained;
+          const newCorrect = s.correctCount + 1;
+          setScore(newScore);
+          setStreak(newStreak);
+          setCorrectCount(newCorrect);
+
+          const shouldLevelUp = newCorrect % LEVEL_UP_EVERY === 0;
+          const nl = shouldLevelUp ? level + 1 : level;
+          if (shouldLevelUp) setLevel(nl);
+          setTimeout(() => nextRound(nl), 650);
+        } else {
+          setStreak(0);
+          const newLives = s.lives - 1;
+          setLives(newLives);
+          if (newLives <= 0) {
+            setTimeout(() => finish(s.score, s.correctCount, newTotal), 750);
+          } else {
+            setTimeout(() => nextRound(level), 750);
+          }
+        }
+      }, [level, nextRound, finish]);
+
+      // Cronômetro
+      useEffect(() => {
+        const id = setInterval(() => {
+          if (stateRef.current.locked) return;
+          const elapsed = (Date.now() - roundStart.current) / 1000;
+          const remain = Math.max(0, roundLimit.current - elapsed);
+          setTimeLeft(remain);
+          if (remain <= 0) {
+            setFeedback({ ok: false, index: -1, timeout: true });
+            resolve(false);
+          }
+        }, 100);
+        return () => clearInterval(id);
+      }, [resolve]);
+
+      /* ---- handlers por modo ---- */
+      const handleChoice = (value, index) => {
+        if (locked) return;
+        const ok = value === round.answer;
+        setFeedback({ ok, index });
+        resolve(ok);
+      };
+      const handleCard = (index) => {
+        if (locked) return;
+        const ok = index === round.answerIndex;
+        setFeedback({ ok, index });
+        resolve(ok);
+      };
+      const toggleItem = (id) => {
+        if (locked) return;
+        setSelected((prev) => {
+          const n = new Set(prev);
+          n.has(id) ? n.delete(id) : n.add(id);
+          return n;
+        });
+      };
+      const submitGroup = () => {
+        if (locked) return;
+        const corr = round.correct;
+        const ok = selected.size === corr.size &&
+                   Array.from(selected).every((id) => corr.has(id));
+        setFeedback({ ok, index: -2 });
+        resolve(ok);
+      };
+
+      const timePct = clamp((timeLeft / roundLimit.current) * 100, 0, 100);
+
+      return (
+        <div className="w-full max-w-md mx-auto px-4 py-5">
+          {/* HUD */}
+          <div className="flex items-center justify-between rounded-2xl border border-slate-700/60 bg-slate-800/40 py-2">
+            <Stat label="Pontos" value={score} accent="text-indigo-300" />
+            <Stat label="Nível" value={level} />
+            <Stat label="Streak" value={"🔥" + streak} accent="text-amber-300" />
+            <Stat label="Vidas" value={"❤️".repeat(lives) || "—"} />
+          </div>
+
+          {/* Timer */}
+          <div className="mt-3 h-2 rounded-full bg-slate-700/60 overflow-hidden">
+            <div className="h-full rounded-full transition-[width] duration-100 ease-linear"
+              style={{
+                width: timePct + "%",
+                background: timePct < 30 ? "#ef4444" : timePct < 60 ? "#eab308" : "#6366f1",
+              }} />
+          </div>
+
+          {/* Enunciado */}
+          <p className="text-center text-slate-200 font-semibold mt-5 mb-4 min-h-[3rem] flex items-center justify-center">
+            {round.label}
+          </p>
+
+          {/* Corpo por modo */}
+          <div key={totalCount} className="anim-pop">
+            {modeKey === "sequence" && (
+              <SequenceBody round={round} feedback={feedback} onChoice={handleChoice} locked={locked} />
+            )}
+            {modeKey === "odd" && (
+              <OddBody round={round} feedback={feedback} onCard={handleCard} />
+            )}
+            {modeKey === "group" && (
+              <GroupBody round={round} selected={selected} feedback={feedback}
+                         onToggle={toggleItem} onSubmit={submitGroup} locked={locked} />
+            )}
+          </div>
+
+          <button onClick={() => onGameOver({ score, correct: correctCount, total: totalCount })}
+            className="mt-6 w-full text-xs text-slate-500 hover:text-slate-300 transition">
+            Encerrar partida
+          </button>
+        </div>
+      );
+    }
+
+    /* ---- Corpo: sequência ---- */
+    function SequenceBody({ round, feedback, onChoice, locked }) {
+      return (
+        <div>
+          <div className="flex flex-wrap justify-center gap-2 mb-6">
+            {round.display.map((tok, i) => (
+              <div key={i} className={
+                "min-w-[52px] h-14 px-2 flex items-center justify-center rounded-xl border text-xl font-bold " +
+                (tok === "?"
+                  ? "border-indigo-400 bg-indigo-500/10 text-indigo-300"
+                  : "border-slate-700 bg-slate-800/60 text-slate-100")
+              }>
+                {round.isShape && tok !== "?"
+                  ? <span style={{ fontSize: 26 }}>{tok}</span>
+                  : tok}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {round.options.map((opt, i) => {
+              const isPicked = feedback && feedback.index === i;
+              const isAnswer = opt === round.answer;
+              let cls = "border-slate-700 bg-slate-800/60 hover:bg-slate-700/70 text-slate-100";
+              if (feedback) {
+                if (isAnswer) cls = "border-emerald-400 bg-emerald-500/20 text-emerald-200";
+                else if (isPicked) cls = "border-rose-400 bg-rose-500/20 text-rose-200 anim-shake";
+                else cls = "border-slate-800 bg-slate-800/30 text-slate-500";
+              }
+              return (
+                <button key={i} disabled={locked} onClick={() => onChoice(opt, i)}
+                  className={"h-16 rounded-xl border text-2xl font-bold transition active:scale-[.97] " + cls}>
+                  {round.isShape ? <span style={{ fontSize: 30 }}>{opt}</span> : opt}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    /* ---- Corpo: intruso ---- */
+    function OddBody({ round, feedback, onCard }) {
+      return (
+        <div className="grid gap-2 justify-center"
+             style={{ gridTemplateColumns: `repeat(${round.cols}, minmax(0, 1fr))` }}>
+          {round.cards.map((c, i) => {
+            const isPicked = feedback && feedback.index === i;
+            const isAnswer = i === round.answerIndex;
+            let ring = "border-slate-700 bg-slate-800/50 hover:bg-slate-700/60";
+            if (feedback) {
+              if (isAnswer) ring = "border-emerald-400 bg-emerald-500/20";
+              else if (isPicked) ring = "border-rose-400 bg-rose-500/20 anim-shake";
+              else ring = "border-slate-800 bg-slate-800/30 opacity-60";
+            }
+            return (
+              <button key={i} onClick={() => onCard(i)}
+                className={"aspect-square rounded-xl border flex items-center justify-center transition active:scale-[.95] " + ring}>
+                <Glyph shape={c.shape} hex={c.color} rot={c.rot} size={30} />
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    /* ---- Corpo: agrupar ---- */
+    function GroupBody({ round, selected, feedback, onToggle, onSubmit, locked }) {
+      return (
+        <div>
+          <div className="grid grid-cols-4 gap-2 mb-5">
+            {round.items.map((it) => {
+              const isSel = selected.has(it.id);
+              const isCorrect = round.correct.has(it.id);
+              let ring = isSel
+                ? "border-indigo-400 bg-indigo-500/20 ring-2 ring-indigo-400/40"
+                : "border-slate-700 bg-slate-800/50 hover:bg-slate-700/60";
+              if (feedback) {
+                // revela gabarito: verde = deveria estar; vermelho = selecionado errado
+                if (isCorrect) ring = "border-emerald-400 bg-emerald-500/20";
+                else if (isSel) ring = "border-rose-400 bg-rose-500/20";
+                else ring = "border-slate-800 bg-slate-800/30 opacity-60";
+              }
+              return (
+                <button key={it.id} disabled={locked} onClick={() => onToggle(it.id)}
+                  className={"aspect-square rounded-xl border flex items-center justify-center transition active:scale-[.95] " + ring}>
+                  <Glyph shape={it.shape} hex={it.hex} size={28} />
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={onSubmit} disabled={locked}
+            className="w-full rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50
+                       text-white font-bold py-3 active:scale-[.98] transition">
+            Confirmar seleção ({selected.size})
+          </button>
+        </div>
+      );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* App raiz                                                           */
+    /* ------------------------------------------------------------------ */
+    function App() {
+      const [screen, setScreen] = useState("home"); // home | game | results
+      const [modeKey, setModeKey] = useState("sequence");
+      const [best, setBest] = useState(loadBest);
+      const [result, setResult] = useState(null);
+      const [isRecord, setIsRecord] = useState(false);
+
+      const startGame = (key) => { setModeKey(key); setScreen("game"); };
+
+      const handleGameOver = ({ score, correct, total }) => {
+        const prev = best[modeKey] || 0;
+        const record = score > prev;
+        if (record) {
+          const nb = { ...best, [modeKey]: score };
+          setBest(nb);
+          saveBest(nb);
+        }
+        setIsRecord(record);
+        setResult({ score, correct, total });
+        setScreen("results");
+      };
+
+      return (
+        <div className="min-h-full flex items-center justify-center py-4">
+          {screen === "home" && <HomeScreen best={best} onStart={startGame} />}
+          {screen === "game" && (
+            <GameScreen key={modeKey + Date.now()} modeKey={modeKey} onGameOver={handleGameOver} />
+          )}
+          {screen === "results" && result && (
+            <ResultsScreen
+              modeKey={modeKey}
+              score={result.score}
+              correct={result.correct}
+              total={result.total}
+              best={best[modeKey] || 0}
+              isRecord={isRecord}
+              onReplay={() => setScreen("game")}
+              onHome={() => setScreen("home")}
+            />
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

@@ -8,9 +8,11 @@ Agent Reach nem interfere nele.
 
 | Modo | Objetivo |
 | --- | --- |
-| 🔢 **Sequências** | Descobrir o item que falta numa sequência lógica (aritmética, geométrica, alternada, ciclo de formas, soma tipo Fibonacci). |
+| 🔢 **Sequências** | Descobrir o item que falta numa sequência lógica (aritmética, geométrica, alternada, ciclo de formas, soma tipo Fibonacci). Atalho: teclas 1–4. |
 | 🔍 **Ache o Intruso** | Encontrar, numa grade, o único item que quebra o padrão (forma, cor ou rotação). |
 | 🧩 **Agrupar por Regra** | Selecionar todos os itens que seguem uma regra oculta (cor, forma, E/OU compostos). |
+| 🧠 **Memória** | Memorizar um padrão que pisca (estilo Simon) e reproduzir na ordem; a sequência cresce por nível. |
+| 📅 **Desafio Diário** | 10 rodadas fixas do dia (semente determinística — o mesmo desafio para todos), sem vidas; guarda o melhor diário e o histórico. |
 
 ## Progressão e pontuação
 
@@ -18,7 +20,12 @@ Agent Reach nem interfere nele.
 - **Pontuação:** pontos-base + bônus por nível + **bônus de velocidade** (quanto mais rápido, melhor)
   × **multiplicador de streak** (acertos seguidos).
 - **3 vidas:** errar ou deixar o tempo acabar custa uma vida; sem vidas, fim de jogo.
-- **Recorde por modo** salvo no navegador (`localStorage`).
+- **Recorde por modo** salvo no navegador (`localStorage`), além do melhor resultado do Desafio Diário.
+
+## Acessibilidade
+
+- Navegação por teclado (Tab/Enter; teclas 1–4 nas Sequências), foco visível, `aria-label`/`aria-live`.
+- Respeita `prefers-reduced-motion` (desliga animações) e tem botão de **mudo** para os efeitos sonoros.
 
 ## Como rodar
 

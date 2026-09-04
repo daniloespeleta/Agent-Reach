@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Pattern Trainer — Treino de Padrões</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&display=swap" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { color-scheme: dark; }
+    html, body, #root { height: 100%; }
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 800px at 50% -10%, #1e293b 0%, #0b1120 55%, #060a14 100%);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      color: #e2e8f0;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .display { font-family: "Chakra Petch", ui-sans-serif, system-ui, sans-serif; }
+    @keyframes pop { 0% { transform: scale(.9); opacity: 0 } 100% { transform: scale(1); opacity: 1 } }
+    @keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-6px)} 75%{transform:translateX(6px)} }
+    @keyframes float { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-6px)} }
+    .anim-pop { animation: pop .18s ease-out both; }
+    .anim-shake { animation: shake .3s ease-in-out both; }
+    .anim-float { animation: float 3s ease-in-out infinite; }
+    .no-select { user-select: none; -webkit-user-select: none; }
+    /* Acessibilidade: foco visível e teclado */
+    button:focus-visible, [tabindex]:focus-visible {
+      outline: 3px solid #a5b4fc; outline-offset: 2px; border-radius: 12px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .anim-pop, .anim-shake, .anim-float { animation: none !important; }
+      * { scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" data-presets="react">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    /* ------------------------------------------------------------------ */
+    /* RNG (trocável — permite Desafio Diário determinístico por semente)  */
+    /* ------------------------------------------------------------------ */
+    let RNG = Math.random;
+    function mulberry32(seed) {
+      let a = seed >>> 0;
+      return function () {
+        a |= 0; a = (a + 0x6D2B79F5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function withSeed(seed, fn) {
+      const prev = RNG; RNG = mulberry32(seed);
+      try { return fn(); } finally { RNG = prev; }
+    }
+
+    const rand = (n) => Math.floor(RNG() * n);
+    const pick = (arr) => arr[rand(arr.length)];
+    const shuffle = (arr) => {
+      const a = arr.slice();
+      for (let i = a.length - 1; i > 0; i--) { const j = rand(i + 1); [a[i], a[j]] = [a[j], a[i]]; }
+      return a;
+    };
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+    /* ------------------------------------------------------------------ */
+    /* Persistência tolerante                                             */
+    /* ------------------------------------------------------------------ */
+    function loadJSON(key) {
+      try { return JSON.parse(localStorage.getItem(key) || "{}") || {}; } catch (e) { return {}; }
+    }
+    function saveJSON(key, obj) {
+      try { localStorage.setItem(key, JSON.stringify(obj)); } catch (e) {}
+    }
+    const BEST_KEY = "patternTrainer.best";
+    const DAILY_KEY = "patternTrainer.daily";
+    const PREF_KEY = "patternTrainer.prefs";
+
+    /* ------------------------------------------------------------------ */
+    /* Áudio (bip curto, respeita mudo)                                   */
+    /* ------------------------------------------------------------------ */
+    let audioCtx = null;
+    function beep(freq, ms, muted) {
+      if (muted) return;
+      try {
+        audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        const o = audioCtx.createOscillator();
+        const g = audioCtx.createGain();
+        o.type = "sine"; o.frequency.value = freq;
+        g.gain.value = 0.05;
+        o.connect(g); g.connect(audioCtx.destination);
+        o.start();
+        g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + ms / 1000);
+        o.stop(audioCtx.currentTime + ms / 1000);
+      } catch (e) {}
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Configuração dos modos                                             */
+    /* ------------------------------------------------------------------ */
+    const MODES = {
+      sequence: { key: "sequence", name: "Sequências", emoji: "🔢", timed: true,
+        blurb: "Descubra o item que falta na sequência lógica." },
+      odd:      { key: "odd", name: "Ache o Intruso", emoji: "🔍", timed: true,
+        blurb: "Encontre o item que quebra o padrão da grade." },
+      group:    { key: "group", name: "Agrupar por Regra", emoji: "🧩", timed: true,
+        blurb: "Selecione todos os itens que seguem a regra oculta." },
+      memory:   { key: "memory", name: "Memória", emoji: "🧠", timed: false,
+        blurb: "Memorize o padrão que pisca e reproduza na ordem." },
+    };
+
+    const SHAPES = ["●", "▲", "■", "◆", "★", "⬟", "▬", "⬢"];
+    const COLORS = [
+      { name: "vermelho", hex: "#ef4444" }, { name: "azul", hex: "#3b82f6" },
+      { name: "verde", hex: "#22c55e" }, { name: "amarelo", hex: "#eab308" },
+      { name: "roxo", hex: "#a855f7" }, { name: "laranja", hex: "#f97316" },
+      { name: "ciano", hex: "#06b6d4" }, { name: "rosa", hex: "#ec4899" },
+    ];
+
+    /* ------------------------------------------------------------------ */
+    /* Gerador: SEQUÊNCIAS                                                 */
+    /* ------------------------------------------------------------------ */
+    function generateSequenceRound(level) {
+      const types = ["arith"];
+      if (level >= 2) types.push("geom");
+      if (level >= 3) types.push("alt");
+      if (level >= 4) types.push("shapeCycle");
+      if (level >= 5) types.push("fib");
+      const type = pick(types);
+      const len = clamp(4 + Math.floor(level / 2), 4, 7);
+      let values = [], label = "";
+
+      if (type === "arith") {
+        const start = 1 + rand(9 + level);
+        const step = (1 + rand(3 + level)) * (level >= 3 && RNG() < 0.4 ? -1 : 1);
+        for (let i = 0; i < len; i++) values.push(start + step * i);
+        label = "Número que completa a sequência";
+      } else if (type === "geom") {
+        const start = 1 + rand(4), ratio = 2 + rand(2);
+        for (let i = 0; i < len; i++) values.push(start * ratio ** i);
+        label = "Número que completa a sequência";
+      } else if (type === "alt") {
+        const start = 1 + rand(9), a = 1 + rand(5), b = 1 + rand(5);
+        let v = start;
+        for (let i = 0; i < len; i++) { values.push(v); v += (i % 2 === 0 ? a : b); }
+        label = "Número que completa a sequência";
+      } else if (type === "fib") {
+        let x = 1 + rand(3), y = 1 + rand(4);
+        values.push(x, y);
+        for (let i = 2; i < len; i++) { const z = x + y; values.push(z); x = y; y = z; }
+        label = "Número que completa a sequência (soma dos anteriores)";
+      } else if (type === "shapeCycle") {
+        const base = shuffle(SHAPES).slice(0, 3 + rand(2));
+        const step = 1 + rand(base.length - 1);
+        for (let i = 0; i < len; i++) values.push(base[(i * step) % base.length]);
+        label = "Forma que completa o padrão";
+      }
+
+      const hideIndex = (level >= 4 && RNG() < 0.35) ? 1 + rand(len - 2) : len - 1;
+      const answer = values[hideIndex];
+      const isShape = type === "shapeCycle";
+
+      const options = new Set([String(answer)]);
+      if (isShape) {
+        while (options.size < 4) options.add(pick(SHAPES));
+      } else {
+        const near = [answer + 1, answer - 1, answer + 2, answer - 2, Math.round(answer * 1.5), answer + 3, answer - 3];
+        for (const d of shuffle(near)) { if (options.size >= 4) break; if (d !== answer && d >= 0) options.add(String(d)); }
+        while (options.size < 4) options.add(String(answer + 4 + rand(5)));
+      }
+      const display = values.map((v, i) => (i === hideIndex ? "?" : String(v)));
+      return { mode: "sequence", label, display, isShape, options: shuffle(Array.from(options)), answer: String(answer) };
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Gerador: ACHE O INTRUSO                                            */
+    /* ------------------------------------------------------------------ */
+    function nearestColor(base, others) {
+      const toRgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+      const [br, bg, bb] = toRgb(base.hex);
+      let best = others[0], bestD = Infinity;
+      for (const c of others) {
+        const [r, g, b] = toRgb(c.hex);
+        const d = (r - br) ** 2 + (g - bg) ** 2 + (b - bb) ** 2;
+        if (d < bestD) { bestD = d; best = c; }
+      }
+      return best;
+    }
+    function generateOddOneOutRound(level) {
+      const cols = clamp(3 + Math.floor(level / 3), 3, 5);
+      const rows = clamp(2 + Math.floor(level / 2), 2, 5);
+      const total = cols * rows;
+      const baseShape = pick(SHAPES), baseColor = pick(COLORS);
+      const dims = ["shape", "color"];
+      if (level >= 3) dims.push("rotation");
+      const diff = pick(dims);
+      let oddShape = baseShape, oddColor = baseColor, oddRot = 0, baseRot = 0;
+      if (diff === "shape") {
+        oddShape = pick(SHAPES.filter((s) => s !== baseShape));
+      } else if (diff === "color") {
+        const others = COLORS.filter((c) => c.name !== baseColor.name);
+        oddColor = level >= 4 ? nearestColor(baseColor, others) : pick(others);
+      } else { oddRot = level >= 5 ? 15 : 45; }
+      const oddIndex = rand(total);
+      const cards = [];
+      for (let i = 0; i < total; i++) {
+        const isOdd = i === oddIndex;
+        cards.push({ shape: isOdd ? oddShape : baseShape, color: (isOdd ? oddColor : baseColor).hex, rot: isOdd ? oddRot : baseRot });
+      }
+      return { mode: "odd", label: "Toque no item diferente dos demais", cols, rows, cards, answerIndex: oddIndex };
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Gerador: AGRUPAR POR REGRA                                         */
+    /* ------------------------------------------------------------------ */
+    function generateGroupingRound(level) {
+      const count = clamp(6 + level, 6, 12);
+      const shapeA = pick(SHAPES), shapeB = pick(SHAPES.filter((s) => s !== shapeA));
+      const colorA = pick(COLORS), colorB = pick(COLORS.filter((c) => c.name !== colorA.name));
+      const rules = [
+        { text: `Selecione todas as peças da cor ${colorA.name}`, match: (it) => it.color === colorA.name },
+        { text: `Selecione todas as peças com a forma "${shapeA}"`, match: (it) => it.shape === shapeA },
+      ];
+      if (level >= 3) rules.push({ text: `Selecione as peças ${colorA.name} E com a forma "${shapeA}"`, match: (it) => it.color === colorA.name && it.shape === shapeA });
+      if (level >= 4) rules.push({ text: `Selecione as peças ${colorA.name} OU com a forma "${shapeA}"`, match: (it) => it.color === colorA.name || it.shape === shapeA });
+      const rule = pick(rules);
+      const shapes = [shapeA, shapeB], colors = [colorA, colorB];
+      let items = [];
+      for (let i = 0; i < count; i++) {
+        const s = pick(shapes), c = pick(colors);
+        items.push({ id: i, shape: s, color: c.name, hex: c.hex });
+      }
+      if (!items.some((it) => rule.match(it))) items[0] = { id: 0, shape: shapeA, color: colorA.name, hex: colorA.hex };
+      if (!items.some((it) => !rule.match(it))) items[items.length - 1] = { id: items.length - 1, shape: shapeB, color: colorB.name, hex: colorB.hex };
+      const correct = items.filter((it) => rule.match(it)).map((it) => it.id);
+      return { mode: "group", label: rule.text, items, correct: new Set(correct) };
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Gerador: MEMÓRIA (Simon)                                           */
+    /* ------------------------------------------------------------------ */
+    function generateMemoryRound(level) {
+      const pads = level >= 3 ? 9 : 4;            // 2x2 nos níveis iniciais, 3x3 depois
+      const seqLen = clamp(2 + level, 3, 9);
+      const flashMs = clamp(620 - level * 45, 320, 620);
+      const sequence = [];
+      for (let i = 0; i < seqLen; i++) sequence.push(rand(pads));
+      return { mode: "memory", label: "Memorize a ordem e reproduza", pads, sequence, flashMs };
+    }
+
+    function generateRound(mode, level) {
+      if (mode === "sequence") return generateSequenceRound(level);
+      if (mode === "odd") return generateOddOneOutRound(level);
+      if (mode === "group") return generateGroupingRound(level);
+      return generateMemoryRound(level);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Constantes de jogo                                                 */
+    /* ------------------------------------------------------------------ */
+    const START_LIVES = 3;
+    const LEVEL_UP_EVERY = 4;
+    const BASE_POINTS = 100;
+    const DAILY_ROUNDS = 10;
+    const timeForLevel = (lvl) => clamp(20 - lvl, 8, 20);
+
+    function todayKey() {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    }
+    function dailySeed() {
+      const d = new Date();
+      return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+    }
+    function buildDailyPlaylist() {
+      return withSeed(dailySeed(), () => {
+        const modes = ["sequence", "odd", "group"];
+        const list = [];
+        for (let i = 0; i < DAILY_ROUNDS; i++) list.push(generateRound(modes[i % modes.length], 1 + Math.floor(i / 2)));
+        return list;
+      });
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Componentes visuais reutilizáveis                                  */
+    /* ------------------------------------------------------------------ */
+    function Glyph({ shape, hex, rot = 0, size = 34 }) {
+      return (<span className="no-select" style={{ color: hex, fontSize: size, lineHeight: 1, display: "inline-block", transform: `rotate(${rot}deg)` }}>{shape}</span>);
+    }
+    function Stat({ label, value, accent }) {
+      return (
+        <div className="flex flex-col items-center px-3">
+          <span className="text-[10px] uppercase tracking-wider text-slate-400">{label}</span>
+          <span className={"display text-lg font-bold tabular-nums " + (accent || "text-slate-100")}>{value}</span>
+        </div>
+      );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Tela: HOME                                                         */
+    /* ------------------------------------------------------------------ */
+    function HomeScreen({ best, daily, muted, onToggleMute, onStart, onDaily }) {
+      const today = todayKey();
+      const playedToday = daily[today];
+      const bestDaily = Object.values(daily).reduce((m, r) => Math.max(m, r.score || 0), 0);
+      return (
+        <div className="w-full max-w-md mx-auto text-center px-5 py-8">
+          <div className="flex justify-end">
+            <button onClick={onToggleMute} aria-label={muted ? "Ativar som" : "Silenciar"}
+              className="text-slate-400 hover:text-slate-200 text-sm rounded-lg px-2 py-1">
+              {muted ? "🔇 Som off" : "🔊 Som on"}
+            </button>
+          </div>
+          <div className="anim-float text-6xl mb-2">🧠</div>
+          <h1 className="display text-3xl font-bold text-slate-50 tracking-tight">Pattern Trainer</h1>
+          <p className="text-slate-400 mt-2 mb-6">Treine seu cérebro a reconhecer padrões.</p>
+
+          <button onClick={onDaily}
+            className="w-full mb-4 rounded-2xl border border-amber-400/40 bg-gradient-to-br from-amber-500/15 to-orange-500/10
+                       hover:border-amber-300/70 transition-all p-4 text-left active:scale-[.98] flex items-center gap-4">
+            <span className="text-3xl">📅</span>
+            <span className="flex-1">
+              <span className="display block font-bold text-amber-200">Desafio Diário</span>
+              <span className="block text-xs text-slate-400">
+                {playedToday ? `Hoje: ${playedToday.score} pts (${playedToday.correct}/${playedToday.total})` : "10 rodadas fixas do dia — mesmo desafio para todos"}
+              </span>
+            </span>
+            <span className="text-right">
+              <span className="block text-[10px] uppercase text-slate-500">recorde</span>
+              <span className="display block font-bold text-amber-300 tabular-nums">{bestDaily}</span>
+            </span>
+          </button>
+
+          <div className="text-[11px] uppercase tracking-wider text-slate-500 mb-2 text-left">Modos livres</div>
+          <div className="space-y-3">
+            {Object.values(MODES).map((m) => (
+              <button key={m.key} onClick={() => onStart(m.key)}
+                className="w-full group flex items-center gap-4 rounded-2xl border border-slate-700/70 bg-slate-800/50
+                           hover:bg-slate-700/60 hover:border-indigo-400/60 transition-all p-4 text-left active:scale-[.98]">
+                <span className="text-3xl">{m.emoji}</span>
+                <span className="flex-1">
+                  <span className="display block font-bold text-slate-100">{m.name}</span>
+                  <span className="block text-xs text-slate-400">{m.blurb}</span>
+                </span>
+                <span className="text-right">
+                  <span className="block text-[10px] uppercase text-slate-500">recorde</span>
+                  <span className="display block font-bold text-amber-300 tabular-nums">{best[m.key] || 0}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-slate-600 mt-8">Dificuldade progressiva • 3 vidas • bônus de velocidade e streak</p>
+        </div>
+      );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Tela: RESULTS                                                      */
+    /* ------------------------------------------------------------------ */
+    function ResultsScreen({ heading, subtitle, score, correct, total, best, bestLabel, isRecord, onReplay, replayLabel, onHome }) {
+      const acc = total > 0 ? Math.round((correct / total) * 100) : 0;
+      return (
+        <div className="w-full max-w-md mx-auto text-center px-5 py-10 anim-pop">
+          <div className="text-5xl mb-2">{isRecord ? "🏆" : "🎯"}</div>
+          <h2 className="display text-2xl font-bold text-slate-50">{heading}</h2>
+          <p className="text-slate-400 text-sm mb-6">{subtitle}</p>
+          <div className="rounded-2xl border border-slate-700/70 bg-slate-800/50 p-6 mb-6">
+            <div className="display text-5xl font-bold text-indigo-300 tabular-nums">{score}</div>
+            <div className="text-xs uppercase tracking-wider text-slate-500 mt-1">pontos</div>
+            <div className="flex justify-center gap-6 mt-5 text-sm">
+              <div><span className="display font-bold text-slate-100 tabular-nums">{correct}/{total}</span><div className="text-[11px] text-slate-500">acertos</div></div>
+              <div><span className="display font-bold text-slate-100 tabular-nums">{acc}%</span><div className="text-[11px] text-slate-500">precisão</div></div>
+              <div><span className="display font-bold text-amber-300 tabular-nums">{best}</span><div className="text-[11px] text-slate-500">{bestLabel || "recorde"}</div></div>
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={onReplay} className="flex-1 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-bold py-3 active:scale-[.98] transition">{replayLabel || "Jogar de novo"}</button>
+            <button onClick={onHome} className="flex-1 rounded-xl bg-slate-700 hover:bg-slate-600 text-slate-100 font-bold py-3 active:scale-[.98] transition">Menu</button>
+          </div>
+        </div>
+      );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Motor de jogo (livre e diário)                                     */
+    /* ------------------------------------------------------------------ */
+    function GameScreen({ spec, muted, onGameOver }) {
+      const isDaily = spec.kind === "daily";
+      const playlist = useRef(isDaily ? buildDailyPlaylist() : null);
+
+      const [level, setLevel] = useState(1);
+      const [score, setScore] = useState(0);
+      const [lives, setLives] = useState(isDaily ? Infinity : START_LIVES);
+      const [streak, setStreak] = useState(0);
+      const [correctCount, setCorrectCount] = useState(0);
+      const [totalCount, setTotalCount] = useState(0);
+      const [roundIndex, setRoundIndex] = useState(0);
+      const [round, setRound] = useState(() => isDaily ? playlist.current[0] : generateRound(spec.modeKey, 1));
+      const [feedback, setFeedback] = useState(null);
+      const [locked, setLocked] = useState(false);
+      const [selected, setSelected] = useState(new Set());
+      const [timeLeft, setTimeLeft] = useState(timeForLevel(1));
+
+      const timed = round.mode !== "memory";
+      const roundStart = useRef(Date.now());
+      const roundLimit = useRef(timeForLevel(1));
+
+      const stateRef = useRef();
+      stateRef.current = { level, score, lives, streak, correctCount, totalCount, roundIndex, locked, timed };
+
+      const finish = useCallback((s, c, t) => onGameOver({ score: s, correct: c, total: t }), [onGameOver]);
+
+      const setupRound = useCallback((r, lvl) => {
+        const limit = timeForLevel(lvl);
+        roundLimit.current = limit;
+        roundStart.current = Date.now();
+        setSelected(new Set());
+        setFeedback(null);
+        setLocked(false);
+        setTimeLeft(limit);
+        setRound(r);
+      }, []);
+
+      const resolve = useCallback((ok) => {
+        const s = stateRef.current;
+        if (s.locked) return;
+        setLocked(true);
+        beep(ok ? 660 : 180, ok ? 120 : 220, muted);
+        const newTotal = s.totalCount + 1;
+        setTotalCount(newTotal);
+
+        let newScore = s.score, newCorrect = s.correctCount, newStreak = s.streak, newLives = s.lives;
+        if (ok) {
+          const timeBonus = s.timed ? Math.round(clamp(1 - (Date.now() - roundStart.current) / 1000 / roundLimit.current, 0, 1) * 60) : 30;
+          newStreak = s.streak + 1;
+          const mult = 1 + Math.min(newStreak - 1, 5) * 0.25;
+          newScore = s.score + Math.round((BASE_POINTS + s.level * 15 + timeBonus) * mult);
+          newCorrect = s.correctCount + 1;
+          setScore(newScore); setStreak(newStreak); setCorrectCount(newCorrect);
+        } else {
+          newStreak = 0; setStreak(0);
+          if (!isDaily) { newLives = s.lives - 1; setLives(newLives); }
+        }
+
+        const advance = () => {
+          if (isDaily) {
+            const nextIdx = s.roundIndex + 1;
+            if (nextIdx >= playlist.current.length) { finish(newScore, newCorrect, newTotal); return; }
+            setRoundIndex(nextIdx);
+            setupRound(playlist.current[nextIdx], 1 + Math.floor(nextIdx / 2));
+            return;
+          }
+          if (!ok && newLives <= 0) { finish(newScore, newCorrect, newTotal); return; }
+          let lvl = s.level;
+          if (ok && newCorrect % LEVEL_UP_EVERY === 0) { lvl = s.level + 1; setLevel(lvl); }
+          setupRound(generateRound(spec.modeKey, lvl), lvl);
+        };
+        setTimeout(advance, ok ? 650 : 780);
+      }, [muted, isDaily, spec.modeKey, finish, setupRound]);
+
+      // Cronômetro (só modos cronometrados)
+      useEffect(() => {
+        if (!timed) return;
+        const id = setInterval(() => {
+          if (stateRef.current.locked) return;
+          const remain = Math.max(0, roundLimit.current - (Date.now() - roundStart.current) / 1000);
+          setTimeLeft(remain);
+          if (remain <= 0) { setFeedback({ ok: false, index: -1 }); resolve(false); }
+        }, 100);
+        return () => clearInterval(id);
+      }, [timed, resolve, roundIndex]);
+
+      // Teclado: 1-4 escolhe alternativas no modo Sequências
+      useEffect(() => {
+        if (round.mode !== "sequence") return;
+        const onKey = (e) => {
+          const n = parseInt(e.key, 10);
+          if (n >= 1 && n <= round.options.length && !stateRef.current.locked) {
+            handleChoice(round.options[n - 1], n - 1);
+          }
+        };
+        window.addEventListener("keydown", onKey);
+        return () => window.removeEventListener("keydown", onKey);
+      }); // eslint-disable-line
+
+      const handleChoice = (value, index) => {
+        if (locked) return;
+        const ok = value === round.answer;
+        setFeedback({ ok, index }); resolve(ok);
+      };
+      const handleCard = (index) => {
+        if (locked) return;
+        const ok = index === round.answerIndex;
+        setFeedback({ ok, index }); resolve(ok);
+      };
+      const toggleItem = (id) => {
+        if (locked) return;
+        setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+      };
+      const submitGroup = () => {
+        if (locked) return;
+        const corr = round.correct;
+        const ok = selected.size === corr.size && Array.from(selected).every((id) => corr.has(id));
+        setFeedback({ ok, index: -2 }); resolve(ok);
+      };
+
+      const timePct = clamp((timeLeft / roundLimit.current) * 100, 0, 100);
+      const total = isDaily ? playlist.current.length : null;
+
+      return (
+        <div className="w-full max-w-md mx-auto px-4 py-5">
+          <div className="flex items-center justify-between rounded-2xl border border-slate-700/60 bg-slate-800/40 py-2">
+            <Stat label="Pontos" value={score} accent="text-indigo-300" />
+            <Stat label={isDaily ? "Rodada" : "Nível"} value={isDaily ? `${roundIndex + 1}/${total}` : level} />
+            <Stat label="Streak" value={"🔥" + streak} accent="text-amber-300" />
+            <Stat label="Vidas" value={isDaily ? "∞" : ("❤️".repeat(lives) || "—")} />
+          </div>
+
+          <div className="mt-3 h-2 rounded-full bg-slate-700/60 overflow-hidden" style={{ visibility: timed ? "visible" : "hidden" }}>
+            <div className="h-full rounded-full transition-[width] duration-100 ease-linear"
+              style={{ width: timePct + "%", background: timePct < 30 ? "#ef4444" : timePct < 60 ? "#eab308" : "#6366f1" }} />
+          </div>
+
+          <p className="text-center text-slate-200 font-semibold mt-5 mb-4 min-h-[3rem] flex items-center justify-center">{round.label}</p>
+
+          <div key={totalCount} className="anim-pop">
+            {round.mode === "sequence" && <SequenceBody round={round} feedback={feedback} onChoice={handleChoice} locked={locked} />}
+            {round.mode === "odd" && <OddBody round={round} feedback={feedback} onCard={handleCard} />}
+            {round.mode === "group" && <GroupBody round={round} selected={selected} feedback={feedback} onToggle={toggleItem} onSubmit={submitGroup} locked={locked} />}
+            {round.mode === "memory" && <MemoryBody round={round} muted={muted} onComplete={(ok) => { setFeedback({ ok, index: -3 }); resolve(ok); }} />}
+          </div>
+
+          <button onClick={() => onGameOver({ score, correct: correctCount, total: totalCount })}
+            className="mt-6 w-full text-xs text-slate-500 hover:text-slate-300 transition">Encerrar partida</button>
+        </div>
+      );
+    }
+
+    /* ---- Corpo: sequência ---- */
+    function SequenceBody({ round, feedback, onChoice, locked }) {
+      return (
+        <div>
+          <div className="flex flex-wrap justify-center gap-2 mb-6">
+            {round.display.map((tok, i) => (
+              <div key={i} className={"display min-w-[52px] h-14 px-2 flex items-center justify-center rounded-xl border text-xl font-bold tabular-nums " +
+                (tok === "?" ? "border-indigo-400 bg-indigo-500/10 text-indigo-300" : "border-slate-700 bg-slate-800/60 text-slate-100")}>
+                {round.isShape && tok !== "?" ? <span style={{ fontSize: 26 }}>{tok}</span> : tok}
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {round.options.map((opt, i) => {
+              const isPicked = feedback && feedback.index === i;
+              const isAnswer = opt === round.answer;
+              let cls = "border-slate-700 bg-slate-800/60 hover:bg-slate-700/70 text-slate-100";
+              if (feedback) {
+                if (isAnswer) cls = "border-emerald-400 bg-emerald-500/20 text-emerald-200";
+                else if (isPicked) cls = "border-rose-400 bg-rose-500/20 text-rose-200 anim-shake";
+                else cls = "border-slate-800 bg-slate-800/30 text-slate-500";
+              }
+              return (
+                <button key={i} disabled={locked} onClick={() => onChoice(opt, i)}
+                  aria-label={`Alternativa ${i + 1}: ${opt}`}
+                  className={"display relative h-16 rounded-xl border text-2xl font-bold transition active:scale-[.97] " + cls}>
+                  <span className="absolute top-1 left-2 text-[10px] text-slate-500 font-normal">{i + 1}</span>
+                  {round.isShape ? <span style={{ fontSize: 30 }}>{opt}</span> : opt}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-center text-[11px] text-slate-600 mt-3">Dica: use as teclas 1–4</p>
+        </div>
+      );
+    }
+
+    /* ---- Corpo: intruso ---- */
+    function OddBody({ round, feedback, onCard }) {
+      return (
+        <div className="grid gap-2 justify-center" style={{ gridTemplateColumns: `repeat(${round.cols}, minmax(0, 1fr))` }}>
+          {round.cards.map((c, i) => {
+            const isPicked = feedback && feedback.index === i;
+            const isAnswer = i === round.answerIndex;
+            let ring = "border-slate-700 bg-slate-800/50 hover:bg-slate-700/60";
+            if (feedback) {
+              if (isAnswer) ring = "border-emerald-400 bg-emerald-500/20";
+              else if (isPicked) ring = "border-rose-400 bg-rose-500/20 anim-shake";
+              else ring = "border-slate-800 bg-slate-800/30 opacity-60";
+            }
+            return (
+              <button key={i} onClick={() => onCard(i)} aria-label={`Item ${i + 1}`}
+                className={"aspect-square rounded-xl border flex items-center justify-center transition active:scale-[.95] " + ring}>
+                <Glyph shape={c.shape} hex={c.color} rot={c.rot} size={30} />
+              </button>
+            );
+          })}
+        </div>
+      );
+    }
+
+    /* ---- Corpo: agrupar ---- */
+    function GroupBody({ round, selected, feedback, onToggle, onSubmit, locked }) {
+      return (
+        <div>
+          <div className="grid grid-cols-4 gap-2 mb-5">
+            {round.items.map((it) => {
+              const isSel = selected.has(it.id), isCorrect = round.correct.has(it.id);
+              let ring = isSel ? "border-indigo-400 bg-indigo-500/20 ring-2 ring-indigo-400/40" : "border-slate-700 bg-slate-800/50 hover:bg-slate-700/60";
+              if (feedback) {
+                if (isCorrect) ring = "border-emerald-400 bg-emerald-500/20";
+                else if (isSel) ring = "border-rose-400 bg-rose-500/20";
+                else ring = "border-slate-800 bg-slate-800/30 opacity-60";
+              }
+              return (
+                <button key={it.id} disabled={locked} onClick={() => onToggle(it.id)}
+                  aria-pressed={isSel} aria-label={`${it.shape} ${it.color}`}
+                  className={"aspect-square rounded-xl border flex items-center justify-center transition active:scale-[.95] " + ring}>
+                  <Glyph shape={it.shape} hex={it.hex} size={28} />
+                </button>
+              );
+            })}
+          </div>
+          <button onClick={onSubmit} disabled={locked}
+            className="w-full rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white font-bold py-3 active:scale-[.98] transition">
+            Confirmar seleção ({selected.size})
+          </button>
+        </div>
+      );
+    }
+
+    /* ---- Corpo: memória (Simon) ---- */
+    function MemoryBody({ round, muted, onComplete }) {
+      const [phase, setPhase] = useState("watch");   // watch | input
+      const [active, setActive] = useState(-1);       // pad iluminado na demonstração
+      const [entered, setEntered] = useState([]);
+      const [flash, setFlash] = useState(-1);         // feedback rápido do clique
+      const cols = round.pads === 9 ? 3 : 2;
+
+      useEffect(() => {
+        let alive = true;
+        const timers = [];
+        const step = round.flashMs, gap = Math.round(step * 0.35);
+        // pequena pausa antes de começar
+        round.sequence.forEach((pad, i) => {
+          timers.push(setTimeout(() => { if (!alive) return; setActive(pad); beep(380 + pad * 60, 160, muted); }, 500 + i * (step + gap)));
+          timers.push(setTimeout(() => { if (!alive) return; setActive(-1); }, 500 + i * (step + gap) + step));
+        });
+        timers.push(setTimeout(() => { if (alive) setPhase("input"); }, 500 + round.sequence.length * (step + gap) + 120));
+        return () => { alive = false; timers.forEach(clearTimeout); };
+      }, [round, muted]);
+
+      const clickPad = (pad) => {
+        if (phase !== "input") return;
+        const next = [...entered, pad];
+        setEntered(next);
+        setFlash(pad); setTimeout(() => setFlash(-1), 160);
+        beep(380 + pad * 60, 120, muted);
+        const idx = next.length - 1;
+        if (round.sequence[idx] !== pad) { onComplete(false); return; }
+        if (next.length === round.sequence.length) { onComplete(true); }
+      };
+
+      return (
+        <div>
+          <p className="text-center text-sm mb-3" aria-live="polite">
+            {phase === "watch"
+              ? <span className="text-amber-300">👀 Observe a sequência…</span>
+              : <span className="text-indigo-300">Sua vez — {entered.length}/{round.sequence.length}</span>}
+          </p>
+          <div className="grid gap-3 justify-center mx-auto" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0,1fr))`, maxWidth: cols === 3 ? 300 : 220 }}>
+            {Array.from({ length: round.pads }).map((_, i) => {
+              const lit = active === i || flash === i;
+              return (
+                <button key={i} onClick={() => clickPad(i)} disabled={phase !== "input"} aria-label={`Botão ${i + 1}`}
+                  className={"aspect-square rounded-2xl border transition-all duration-100 " +
+                    (lit ? "bg-indigo-400 border-indigo-200 scale-105 shadow-lg shadow-indigo-500/40"
+                         : "bg-slate-800/70 border-slate-700 " + (phase === "input" ? "hover:bg-slate-700/80 active:scale-95" : "opacity-80"))}
+                  style={{ minHeight: 64 }} />
+              );
+            })}
+          </div>
+        </div>
+      );
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* App raiz                                                           */
+    /* ------------------------------------------------------------------ */
+    function App() {
+      const [screen, setScreen] = useState("home"); // home | game | results
+      const [spec, setSpec] = useState({ kind: "endless", modeKey: "sequence" });
+      const [best, setBest] = useState(() => loadJSON(BEST_KEY));
+      const [daily, setDaily] = useState(() => loadJSON(DAILY_KEY));
+      const [prefs, setPrefs] = useState(() => { const p = loadJSON(PREF_KEY); return { muted: !!p.muted }; });
+      const [result, setResult] = useState(null);
+      const [isRecord, setIsRecord] = useState(false);
+      const [gameId, setGameId] = useState(0);
+
+      const startEndless = (modeKey) => { setSpec({ kind: "endless", modeKey }); setGameId((g) => g + 1); setScreen("game"); };
+      const startDaily = () => { setSpec({ kind: "daily" }); setGameId((g) => g + 1); setScreen("game"); };
+      const toggleMute = () => setPrefs((p) => { const np = { muted: !p.muted }; saveJSON(PREF_KEY, np); return np; });
+
+      const handleGameOver = ({ score, correct, total }) => {
+        let record = false;
+        if (spec.kind === "endless") {
+          const prev = best[spec.modeKey] || 0;
+          record = score > prev;
+          if (record) { const nb = { ...best, [spec.modeKey]: score }; setBest(nb); saveJSON(BEST_KEY, nb); }
+        } else {
+          const tk = todayKey();
+          const prevToday = daily[tk]?.score || 0;
+          record = score > prevToday;
+          if (record) { const nd = { ...daily, [tk]: { score, correct, total } }; setDaily(nd); saveJSON(DAILY_KEY, nd); }
+        }
+        setIsRecord(record);
+        setResult({ score, correct, total });
+        setScreen("results");
+      };
+
+      const modeName = spec.kind === "daily" ? "Desafio Diário" : MODES[spec.modeKey].name;
+      const bestForResults = spec.kind === "daily"
+        ? Object.values(daily).reduce((m, r) => Math.max(m, r.score || 0), 0)
+        : (best[spec.modeKey] || 0);
+
+      return (
+        <div className="min-h-full flex items-center justify-center py-4">
+          {screen === "home" && (
+            <HomeScreen best={best} daily={daily} muted={prefs.muted} onToggleMute={toggleMute} onStart={startEndless} onDaily={startDaily} />
+          )}
+          {screen === "game" && (
+            <GameScreen key={gameId} spec={spec} muted={prefs.muted} onGameOver={handleGameOver} />
+          )}
+          {screen === "results" && result && (
+            <ResultsScreen
+              heading={isRecord ? "Novo recorde!" : (spec.kind === "daily" ? "Desafio concluído" : "Fim de jogo")}
+              subtitle={modeName}
+              score={result.score} correct={result.correct} total={result.total}
+              best={bestForResults} bestLabel={spec.kind === "daily" ? "melhor diário" : "recorde"}
+              isRecord={isRecord}
+              onReplay={() => { setGameId((g) => g + 1); setScreen("game"); }}
+              replayLabel={spec.kind === "daily" ? "Repetir desafio" : "Jogar de novo"}
+              onHome={() => setScreen("home")}
+            />
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

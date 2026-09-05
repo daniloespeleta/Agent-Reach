@@ -116,6 +116,8 @@
         blurb: "Selecione todos os itens que seguem a regra oculta." },
       memory:   { key: "memory", name: "Memória", emoji: "🧠", timed: false,
         blurb: "Memorize o padrão que pisca e reproduza na ordem." },
+      math:     { key: "math", name: "Cálculo Mental", emoji: "🧮", timed: true,
+        blurb: "Resolva contas de cabeça: +, −, ×, ÷ (dificuldade cresce)." },
     };
 
     const SHAPES = ["●", "▲", "■", "◆", "★", "⬟", "▬", "⬢"];
@@ -257,10 +259,60 @@
       return { mode: "memory", label: "Memorize a ordem e reproduza", pads, sequence, flashMs };
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Gerador: CÁLCULO MENTAL (desafios matemáticos)                     */
+    /* ------------------------------------------------------------------ */
+    function generateMathRound(level) {
+      // operações liberam com o nível: +/- sempre; × a partir de 3; ÷ a partir de 5
+      const ops = ["+", "-"];
+      if (level >= 3) ops.push("×");
+      if (level >= 5) ops.push("÷");
+      const op = pick(ops);
+      let a, b, answer;
+
+      if (op === "+") {
+        const max = 10 + level * 8;
+        a = 1 + rand(max); b = 1 + rand(max); answer = a + b;
+      } else if (op === "-") {
+        const max = 10 + level * 8;
+        a = 1 + rand(max); b = 1 + rand(a);          // resultado nunca negativo
+        answer = a - b;
+      } else if (op === "×") {
+        const t = 2 + level;                          // tabuada cresce com o nível
+        a = 2 + rand(t); b = 2 + rand(t); answer = a * b;
+      } else { // ÷ exata
+        const t = 2 + level;
+        b = 2 + rand(t); answer = 1 + rand(t); a = b * answer; // a ÷ b = answer, sempre inteiro
+      }
+
+      // distratores plausíveis (vizinhos e erros comuns), todos ≠ resposta e ≥ 0
+      const options = new Set([String(answer)]);
+      const spread = Math.max(2, Math.round(Math.abs(answer) * 0.15));
+      const candidates = shuffle([
+        answer + 1, answer - 1, answer + 2, answer - 2,
+        answer + spread, answer - spread, answer + 10, answer + b, answer - b,
+      ]);
+      for (const d of candidates) {
+        if (options.size >= 4) break;
+        if (d !== answer && d >= 0) options.add(String(d));
+      }
+      let extra = 3;
+      while (options.size < 4) options.add(String(answer + extra++));
+
+      return {
+        mode: "math",
+        label: "Quanto é a conta abaixo?",
+        expression: `${a} ${op} ${b}`,
+        options: shuffle(Array.from(options)),
+        answer: String(answer),
+      };
+    }
+
     function generateRound(mode, level) {
       if (mode === "sequence") return generateSequenceRound(level);
       if (mode === "odd") return generateOddOneOutRound(level);
       if (mode === "group") return generateGroupingRound(level);
+      if (mode === "math") return generateMathRound(level);
       return generateMemoryRound(level);
     }
 
@@ -479,9 +531,9 @@
         return () => clearInterval(id);
       }, [timed, resolve, roundIndex]);
 
-      // Teclado: 1-4 escolhe alternativas no modo Sequências
+      // Teclado: 1-4 escolhe alternativas nos modos de múltipla escolha
       useEffect(() => {
-        if (round.mode !== "sequence") return;
+        if (round.mode !== "sequence" && round.mode !== "math") return;
         const onKey = (e) => {
           const n = parseInt(e.key, 10);
           if (n >= 1 && n <= round.options.length && !stateRef.current.locked) {
@@ -537,6 +589,7 @@
             {round.mode === "odd" && <OddBody round={round} feedback={feedback} onCard={handleCard} />}
             {round.mode === "group" && <GroupBody round={round} selected={selected} feedback={feedback} onToggle={toggleItem} onSubmit={submitGroup} locked={locked} />}
             {round.mode === "memory" && <MemoryBody round={round} muted={muted} onComplete={(ok) => { setFeedback({ ok, index: -3 }); resolve(ok); }} />}
+            {round.mode === "math" && <MathBody round={round} feedback={feedback} onChoice={handleChoice} locked={locked} />}
           </div>
 
           <button onClick={() => onGameOver({ score, correct: correctCount, total: totalCount })}
@@ -573,6 +626,41 @@
                   className={"display relative h-16 rounded-xl border text-2xl font-bold transition active:scale-[.97] " + cls}>
                   <span className="absolute top-1 left-2 text-[10px] text-slate-500 font-normal">{i + 1}</span>
                   {round.isShape ? <span style={{ fontSize: 30 }}>{opt}</span> : opt}
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-center text-[11px] text-slate-600 mt-3">Dica: use as teclas 1–4</p>
+        </div>
+      );
+    }
+
+    /* ---- Corpo: cálculo mental ---- */
+    function MathBody({ round, feedback, onChoice, locked }) {
+      return (
+        <div>
+          <div className="flex justify-center mb-6">
+            <div className="display flex items-center justify-center gap-2 min-w-[180px] h-20 px-5 rounded-2xl
+                            border border-indigo-400/60 bg-indigo-500/10 text-indigo-200 text-4xl font-bold tabular-nums">
+              <span>{round.expression}</span><span className="text-slate-500">=</span><span className="text-slate-500">?</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {round.options.map((opt, i) => {
+              const isPicked = feedback && feedback.index === i;
+              const isAnswer = opt === round.answer;
+              let cls = "border-slate-700 bg-slate-800/60 hover:bg-slate-700/70 text-slate-100";
+              if (feedback) {
+                if (isAnswer) cls = "border-emerald-400 bg-emerald-500/20 text-emerald-200";
+                else if (isPicked) cls = "border-rose-400 bg-rose-500/20 text-rose-200 anim-shake";
+                else cls = "border-slate-800 bg-slate-800/30 text-slate-500";
+              }
+              return (
+                <button key={i} disabled={locked} onClick={() => onChoice(opt, i)}
+                  aria-label={`Alternativa ${i + 1}: ${opt}`}
+                  className={"display relative h-16 rounded-xl border text-2xl font-bold tabular-nums transition active:scale-[.97] " + cls}>
+                  <span className="absolute top-1 left-2 text-[10px] text-slate-500 font-normal">{i + 1}</span>
+                  {opt}
                 </button>
               );
             })}

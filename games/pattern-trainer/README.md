@@ -12,6 +12,7 @@ Agent Reach nem interfere nele.
 | 🔍 **Ache o Intruso** | Encontrar, numa grade, o único item que quebra o padrão (forma, cor ou rotação). |
 | 🧩 **Agrupar por Regra** | Selecionar todos os itens que seguem uma regra oculta (cor, forma, E/OU compostos). |
 | 🧠 **Memória** | Memorizar um padrão que pisca (estilo Simon) e reproduzir na ordem; a sequência cresce por nível. |
+| 🧮 **Cálculo Mental** | Resolver contas de cabeça (+, −, ×, ÷) com múltipla escolha; operações e números crescem por nível (× a partir do nível 3, ÷ exata a partir do 5). Atalho: teclas 1–4. |
 | 📅 **Desafio Diário** | 10 rodadas fixas do dia (semente determinística — o mesmo desafio para todos), sem vidas; guarda o melhor diário e o histórico. |
 
 ## Progressão e pontuação
